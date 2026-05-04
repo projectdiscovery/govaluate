@@ -1431,6 +1431,23 @@ func TestParameterizedEvaluation(test *testing.T) {
 			Parameters: []EvaluationParameter{{Name: "переменная", Value: 2}},
 			Expected:   float64(10),
 		},
+		// Knetic/govaluate#94, projectdiscovery/nuclei#5580
+		EvaluationTest{
+			Name:     "Single-quoted string preserves embedded double quotes",
+			Input:    `'"abcd"'`,
+			Expected: `"abcd"`,
+		},
+		EvaluationTest{
+			Name:     "Double-quoted string preserves embedded single quotes",
+			Input:    `"it's"`,
+			Expected: "it's",
+		},
+		EvaluationTest{
+			Name:       "nuclei dsl-style contains() with embedded double quotes",
+			Input:      `body == '"Test"'`,
+			Parameters: []EvaluationParameter{{Name: "body", Value: `"Test"`}},
+			Expected:   true,
+		},
 	}
 
 	runEvaluationTests(evaluationTests, test)
