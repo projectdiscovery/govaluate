@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -944,6 +945,63 @@ func TestComparatorParsing(test *testing.T) {
 	}
 
 	tokenParsingTests = combineWhitespaceExpressions(tokenParsingTests)
+	// The white space actually matters for this test...
+	tokenParsingTests = append(tokenParsingTests, TokenParsingTest{
+		Name:  "Cyrilic characters Array membership",
+		Input: `!(переменная IN ("Н11", "Н12","Н13","Н14"))`,
+		Expected: []ExpressionToken{
+			{
+				Kind:  PREFIX,
+				Value: "!",
+			},
+			{
+				Kind: CLAUSE,
+			},
+			{
+				Kind:  VARIABLE,
+				Value: "переменная",
+			},
+			{
+				Kind:  COMPARATOR,
+				Value: "in",
+			},
+			{
+				Kind: CLAUSE,
+			},
+			{
+				Kind:  STRING,
+				Value: "Н11",
+			},
+			{
+				Kind: SEPARATOR,
+			},
+			{
+				Kind:  STRING,
+				Value: "Н12",
+			},
+			{
+				Kind: SEPARATOR,
+			},
+			{
+				Kind:  STRING,
+				Value: "Н13",
+			},
+			{
+				Kind: SEPARATOR,
+			},
+			{
+				Kind:  STRING,
+				Value: "Н14",
+			},
+			{
+				Kind: CLAUSE_CLOSE,
+			},
+			{
+				Kind: CLAUSE_CLOSE,
+			},
+		},
+	},
+	)
 	runTokenParsingTest(tokenParsingTests, test)
 }
 
@@ -1136,6 +1194,24 @@ func TestModifierParsing(test *testing.T) {
 					Value: ">>",
 				},
 				ExpressionToken{
+					Kind:  NUMERIC,
+					Value: 1.0,
+				},
+			},
+		},
+		{
+			Name:  "Single cyrilic parameter with op",
+			Input: "переменная * 1",
+			Expected: []ExpressionToken{
+				{
+					Kind:  VARIABLE,
+					Value: "переменная",
+				},
+				{
+					Kind:  MODIFIER,
+					Value: "*",
+				},
+				{
 					Kind:  NUMERIC,
 					Value: 1.0,
 				},
@@ -1667,4 +1743,44 @@ func runTokenParsingTest(tokenParsingTests []TokenParsingTest, test *testing.T) 
 
 func noop(arguments ...interface{}) (interface{}, error) {
 	return nil, nil
+}
+
+func TestParallelParsing(t *testing.T) {
+	// This test is to ensure that the parser is thread-safe.
+	// It runs a number of parsing tests in parallel, and checks that they all pass.
+
+	var wg sync.WaitGroup
+
+	tokenParsingTests := []TokenParsingTest{
+		TokenParsingTest{
+			Name:  "Simple expression",
+			Input: "1 + 1",
+			Expected: []ExpressionToken{
+				ExpressionToken{
+					Kind:  NUMERIC,
+					Value: 1.0,
+				},
+				ExpressionToken{
+					Kind:  MODIFIER,
+					Value: "+",
+				},
+				ExpressionToken{
+					Kind:  NUMERIC,
+					Value: 1.0,
+				},
+			},
+		},
+	}
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				runTokenParsingTest(tokenParsingTests, t)
+			}
+		}()
+	}
+
+	wg.Wait()
 }

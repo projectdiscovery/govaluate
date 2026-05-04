@@ -8,7 +8,7 @@ import (
   Serves as a "water test" to give an idea of the general overhead of parsing
 */
 func BenchmarkSingleParse(bench *testing.B) {
-
+	bench.ReportAllocs()
 	for i := 0; i < bench.N; i++ {
 		NewEvaluableExpression("1")
 	}
@@ -19,7 +19,7 @@ func BenchmarkSingleParse(bench *testing.B) {
   This is the "expected" use case of govaluate.
 */
 func BenchmarkSimpleParse(bench *testing.B) {
-
+	bench.ReportAllocs()
 	for i := 0; i < bench.N; i++ {
 		NewEvaluableExpression("(requests_made * requests_succeeded / 100) >= 90")
 	}
@@ -29,11 +29,9 @@ func BenchmarkSimpleParse(bench *testing.B) {
   Benchmarks all syntax possibilities in one expression.
 */
 func BenchmarkFullParse(bench *testing.B) {
-
-	var expression string
-
+	bench.ReportAllocs()
 	// represents all the major syntax possibilities.
-	expression = "2 > 1 &&" +
+	expression := "2 > 1 &&" +
 		"'something' != 'nothing' || " +
 		"'2014-01-20' < 'Wed Jul  8 23:07:35 MDT 2015' && " +
 		"[escapedVariable name with spaces] <= unescaped\\-variableName &&" +
@@ -48,7 +46,7 @@ func BenchmarkFullParse(bench *testing.B) {
   Benchmarks the bare-minimum evaluation time
 */
 func BenchmarkEvaluationSingle(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expression, _ := NewEvaluableExpression("1")
 
 	bench.ResetTimer()
@@ -61,7 +59,7 @@ func BenchmarkEvaluationSingle(bench *testing.B) {
   Benchmarks evaluation times of literals (no variables, no modifiers)
 */
 func BenchmarkEvaluationNumericLiteral(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expression, _ := NewEvaluableExpression("(2) > (1)")
 
 	bench.ResetTimer()
@@ -74,7 +72,7 @@ func BenchmarkEvaluationNumericLiteral(bench *testing.B) {
   Benchmarks evaluation times of literals with modifiers
 */
 func BenchmarkEvaluationLiteralModifiers(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expression, _ := NewEvaluableExpression("(2) + (2) == (4)")
 
 	bench.ResetTimer()
@@ -84,7 +82,7 @@ func BenchmarkEvaluationLiteralModifiers(bench *testing.B) {
 }
 
 func BenchmarkEvaluationParameter(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expression, _ := NewEvaluableExpression("requests_made")
 	parameters := map[string]interface{}{
 		"requests_made": 99.0,
@@ -100,7 +98,7 @@ func BenchmarkEvaluationParameter(bench *testing.B) {
   Benchmarks evaluation times of parameters
 */
 func BenchmarkEvaluationParameters(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expression, _ := NewEvaluableExpression("requests_made > requests_succeeded")
 	parameters := map[string]interface{}{
 		"requests_made":      99.0,
@@ -117,7 +115,7 @@ func BenchmarkEvaluationParameters(bench *testing.B) {
   Benchmarks evaluation times of parameters + literals with modifiers
 */
 func BenchmarkEvaluationParametersModifiers(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expression, _ := NewEvaluableExpression("(requests_made * requests_succeeded / 100) >= 90")
 	parameters := map[string]interface{}{
 		"requests_made":      99.0,
@@ -137,10 +135,8 @@ func BenchmarkEvaluationParametersModifiers(bench *testing.B) {
   unnecessarily bloat the evaluation time.
 */
 func BenchmarkComplexExpression(bench *testing.B) {
-
-	var expressionString string
-
-	expressionString = "2 > 1 &&" +
+	bench.ReportAllocs()
+	expressionString := "2 > 1 &&" +
 		"'something' != 'nothing' || " +
 		"'2014-01-20' < 'Wed Jul  8 23:07:35 MDT 2015' && " +
 		"[escapedVariable name with spaces] <= unescaped\\-variableName &&" +
@@ -166,10 +162,8 @@ func BenchmarkComplexExpression(bench *testing.B) {
   it is primarily concerned with tracking how much longer it takes to compile a regex at evaluation-time than during parse-time.
 */
 func BenchmarkRegexExpression(bench *testing.B) {
-
-	var expressionString string
-
-	expressionString = "(foo !~ bar) && (foobar =~ oba)"
+	bench.ReportAllocs()
+	expressionString := "(foo !~ bar) && (foobar =~ oba)"
 
 	expression, _ := NewEvaluableExpression(expressionString)
 	parameters := map[string]interface{}{
@@ -191,7 +185,7 @@ func BenchmarkRegexExpression(bench *testing.B) {
 	Also demonstrates that (generally) compiling a regex at evaluation-time takes an order of magnitude more time than pre-compiling.
 */
 func BenchmarkConstantRegexExpression(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expressionString := "(foo !~ '[bB]az') && (bar =~ '[bB]ar')"
 	expression, _ := NewEvaluableExpression(expressionString)
 
@@ -207,7 +201,7 @@ func BenchmarkConstantRegexExpression(bench *testing.B) {
 }
 
 func BenchmarkAccessors(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expressionString := "foo.Int"
 	expression, _ := NewEvaluableExpression(expressionString)
 
@@ -218,7 +212,7 @@ func BenchmarkAccessors(bench *testing.B) {
 }
 
 func BenchmarkAccessorMethod(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expressionString := "foo.Func()"
 	expression, _ := NewEvaluableExpression(expressionString)
 
@@ -229,7 +223,7 @@ func BenchmarkAccessorMethod(bench *testing.B) {
 }
 
 func BenchmarkAccessorMethodParams(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expressionString := "foo.FuncArgStr('bonk')"
 	expression, _ := NewEvaluableExpression(expressionString)
 
@@ -240,7 +234,7 @@ func BenchmarkAccessorMethodParams(bench *testing.B) {
 }
 
 func BenchmarkNestedAccessors(bench *testing.B) {
-
+	bench.ReportAllocs()
 	expressionString := "foo.Nested.Funk"
 	expression, _ := NewEvaluableExpression(expressionString)
 

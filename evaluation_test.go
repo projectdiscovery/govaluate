@@ -507,6 +507,12 @@ func TestNoParameterEvaluation(test *testing.T) {
 		},
 		EvaluationTest{
 
+			Name:     "Single Element Array membership literal",
+			Input:    "1 in (1)",
+			Expected: true,
+		},
+		EvaluationTest{
+
 			Name:     "Logical operator reordering (#30)",
 			Input:    "(true && true) || (true && false)",
 			Expected: true,
@@ -1418,6 +1424,12 @@ func TestParameterizedEvaluation(test *testing.T) {
 			Input:      "foo.Nil ?? false",
 			Parameters: []EvaluationParameter{fooParameter},
 			Expected:   false,
+		},
+		{
+			Name:       "Test with cyrilic parameter",
+			Input:      "переменная * 5",
+			Parameters: []EvaluationParameter{{Name: "переменная", Value: 2}},
+			Expected:   float64(10),
 		},
 	}
 

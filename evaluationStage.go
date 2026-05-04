@@ -183,7 +183,7 @@ func regexStage(left interface{}, right interface{}, parameters Parameters) (int
 		pattern = right.(*regexp.Regexp)
 	}
 
-	return pattern.Match([]byte(left.(string))), nil
+	return pattern.MatchString(left.(string)), nil
 }
 
 func notRegexStage(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
@@ -404,6 +404,16 @@ func makeAccessorStage(pair []string) evaluationOperator {
 	}
 }
 
+func ensureSliceStage(op evaluationOperator) evaluationOperator {
+	return func(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
+		orig, err := op(left, right, parameters)
+		if err != nil {
+			return orig, err
+		}
+		return []interface{}{orig}, nil
+	}
+}
+
 func separatorStage(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
 
 	var ret []interface{}
@@ -421,6 +431,7 @@ func separatorStage(left interface{}, right interface{}, parameters Parameters) 
 func inStage(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
 
 	for _, value := range right.([]interface{}) {
+		value = castToFloat64(value)
 		if left == value {
 			return true, nil
 		}
