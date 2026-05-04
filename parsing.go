@@ -220,7 +220,13 @@ func readToken(stream *lexerStream, state lexerState, functions map[string]Expre
 		}
 
 		if !isNotQuote(character) {
-			tokenValue, completed = readUntilFalse(stream, true, false, true, isNotQuote)
+			// only terminate on the matching quote, so '"abcd"' and "abc'def" parse correctly
+			// (https://github.com/Knetic/govaluate/issues/94)
+			terminator := isNotDoubleQuote
+			if character == '\'' {
+				terminator = isNotSingleQuote
+			}
+			tokenValue, completed = readUntilFalse(stream, true, false, true, terminator)
 
 			if !completed {
 				return ExpressionToken{}, errors.New("Unclosed string literal"), false
@@ -485,6 +491,14 @@ func isNumeric(character rune) bool {
 func isNotQuote(character rune) bool {
 
 	return character != '\'' && character != '"'
+}
+
+func isNotSingleQuote(character rune) bool {
+	return character != '\''
+}
+
+func isNotDoubleQuote(character rune) bool {
+	return character != '"'
 }
 
 func isNotAlphanumeric(character rune) bool {
