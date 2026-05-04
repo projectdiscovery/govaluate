@@ -23,6 +23,7 @@ func getParameterStage(name string) (*evaluationStage, error) {
 	ret := &evaluationStage{
 		operator: operator,
 	}
+	ret.finalize()
 	storeVal := weak.Make(ret)
 	paramMap.Store(name, storeVal)
 	return ret, nil
@@ -54,6 +55,7 @@ func getConstantStage(value any) (*evaluationStage, error) {
 		symbol:   LITERAL,
 		operator: operator,
 	}
+	ret.finalize()
 	storeVal := weak.Make(ret)
 	constMap.Store(value, storeVal)
 	return ret, nil

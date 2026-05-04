@@ -190,7 +190,7 @@ func (this EvaluableExpression) evaluateStage(stage *evaluationStage, parameters
 		}
 	}
 
-	if stage.isShortCircuitable() {
+	if stage.shortCircuit {
 		switch stage.symbol {
 		case AND:
 			if left == false {
@@ -223,7 +223,7 @@ func (this EvaluableExpression) evaluateStage(stage *evaluationStage, parameters
 		}
 	}
 
-	if this.ChecksTypes {
+	if this.ChecksTypes && stage.hasTypeCheck {
 		if stage.typeCheck == nil {
 
 			err = typeCheck(stage.leftTypeCheck, left, stage.symbol, stage.typeErrorFormat)

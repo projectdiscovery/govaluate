@@ -272,7 +272,7 @@ func planPrecedenceLevel(
 
 		checks = findTypeChecks(symbol)
 
-		return &evaluationStage{
+		s := &evaluationStage{
 
 			symbol:     symbol,
 			leftStage:  leftStage,
@@ -283,7 +283,9 @@ func planPrecedenceLevel(
 			rightTypeCheck:  checks.right,
 			typeCheck:       checks.combined,
 			typeErrorFormat: typeErrorFormat,
-		}, nil
+		}
+		s.finalize()
+		return s, nil
 	}
 
 	stream.rewind()
@@ -311,13 +313,15 @@ func planFunction(stream *tokenStream) (*evaluationStage, error) {
 		return nil, err
 	}
 
-	return &evaluationStage{
+	s := &evaluationStage{
 
 		symbol:          FUNCTIONAL,
 		rightStage:      rightStage,
 		operator:        makeFunctionStage(token.Value.(ExpressionFunction)),
 		typeErrorFormat: "Unable to run function '%v': %v",
-	}, nil
+	}
+	s.finalize()
+	return s, nil
 }
 
 func planAccessor(stream *tokenStream) (*evaluationStage, error) {
@@ -356,13 +360,15 @@ func planAccessor(stream *tokenStream) (*evaluationStage, error) {
 		}
 	}
 
-	return &evaluationStage{
+	s := &evaluationStage{
 
 		symbol:          ACCESS,
 		rightStage:      rightStage,
 		operator:        makeAccessorStage(token.Value.([]string)),
 		typeErrorFormat: "Unable to access parameter field or method '%v': %v",
-	}, nil
+	}
+	s.finalize()
+	return s, nil
 }
 
 /*
@@ -416,6 +422,7 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 			operator:   noopStageRight,
 			symbol:     NOOP,
 		}
+		ret.finalize()
 
 		return ret, nil
 
@@ -450,10 +457,12 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 		return nil, errors.New(errorMsg)
 	}
 
-	return &evaluationStage{
+	s := &evaluationStage{
 		symbol:   symbol,
 		operator: operator,
-	}, nil
+	}
+	s.finalize()
+	return s, nil
 }
 
 /*
@@ -729,8 +738,10 @@ func elideStage(root *evaluationStage) *evaluationStage {
 		return root
 	}
 
-	return &evaluationStage{
+	s := &evaluationStage{
 		symbol:   LITERAL,
 		operator: makeLiteralStage(result),
 	}
+	s.finalize()
+	return s
 }

@@ -4,15 +4,19 @@ package govaluate
 
 func getParameterStage(name string) (*evaluationStage, error) {
 	operator := makeParameterStage(name)
-	return &evaluationStage{
+	s := &evaluationStage{
 		operator: operator,
-	}, nil
+	}
+	s.finalize()
+	return s, nil
 }
 
 func getConstantStage(value interface{}) (*evaluationStage, error) {
 	operator := makeLiteralStage(value)
-	return &evaluationStage{
+	s := &evaluationStage{
 		symbol:   LITERAL,
 		operator: operator,
-	}, nil
+	}
+	s.finalize()
+	return s, nil
 }

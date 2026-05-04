@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 const (
@@ -40,6 +41,11 @@ type evaluationStage struct {
 
 	// regardless of which type check is used, this string format will be used as the error message for type errors
 	typeErrorFormat string
+
+	// precomputed once at planning time; consulted on every Eval call.
+	// kept in sync by setToNonStage and finalize.
+	shortCircuit bool
+	hasTypeCheck bool
 }
 
 var (
@@ -62,24 +68,20 @@ func (this *evaluationStage) setToNonStage(other evaluationStage) {
 	this.rightTypeCheck = other.rightTypeCheck
 	this.typeCheck = other.typeCheck
 	this.typeErrorFormat = other.typeErrorFormat
+	this.finalize()
 }
 
-func (this *evaluationStage) isShortCircuitable() bool {
-
+// finalize precomputes the per-stage flags used by evaluateStage so that the
+// hot path can avoid recomputing them on every recursive call. Must be invoked
+// after any change to symbol or to the type-check function fields.
+func (this *evaluationStage) finalize() {
 	switch this.symbol {
-	case AND:
-		fallthrough
-	case OR:
-		fallthrough
-	case TERNARY_TRUE:
-		fallthrough
-	case TERNARY_FALSE:
-		fallthrough
-	case COALESCE:
-		return true
+	case AND, OR, TERNARY_TRUE, TERNARY_FALSE, COALESCE:
+		this.shortCircuit = true
+	default:
+		this.shortCircuit = false
 	}
-
-	return false
+	this.hasTypeCheck = this.leftTypeCheck != nil || this.rightTypeCheck != nil || this.typeCheck != nil
 }
 
 func noopStageRight(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
@@ -168,19 +170,53 @@ func ternaryElseStage(left interface{}, right interface{}, parameters Parameters
 	return right, nil
 }
 
+// regexCompileCache caches compiled patterns keyed on the source string so
+// that regex comparisons whose right-hand side comes from a parameter (and is
+// therefore not pre-compiled by optimizeTokens) don't pay the regexp.Compile
+// cost on every Eval. Concurrent compiles of the same pattern are benign.
+//
+// The cache is unbounded; callers that feed unbounded distinct regexes can
+// call ResetRegexCache to release the memory.
+var regexCompileCache sync.Map // map[string]regexCacheEntry
+
+type regexCacheEntry struct {
+	pattern *regexp.Regexp
+	err     error
+}
+
+func compileRegex(source string) (*regexp.Regexp, error) {
+	if v, ok := regexCompileCache.Load(source); ok {
+		e := v.(regexCacheEntry)
+		return e.pattern, e.err
+	}
+	pattern, err := regexp.Compile(source)
+	regexCompileCache.Store(source, regexCacheEntry{pattern: pattern, err: err})
+	return pattern, err
+}
+
+// ResetRegexCache drops all entries from the regex compile cache used by the
+// `=~` and `!~` operators. Useful for long-running processes that evaluate
+// many distinct parameter-supplied patterns.
+func ResetRegexCache() {
+	regexCompileCache.Range(func(k, _ interface{}) bool {
+		regexCompileCache.Delete(k)
+		return true
+	})
+}
+
 func regexStage(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
 
 	var pattern *regexp.Regexp
 	var err error
 
-	switch right.(type) {
+	switch r := right.(type) {
 	case string:
-		pattern, err = regexp.Compile(right.(string))
+		pattern, err = compileRegex(r)
 		if err != nil {
-			return nil, errors.New(fmt.Sprintf("Unable to compile regexp pattern '%v': %v", right, err))
+			return nil, fmt.Errorf("Unable to compile regexp pattern '%v': %v", right, err)
 		}
 	case *regexp.Regexp:
-		pattern = right.(*regexp.Regexp)
+		pattern = r
 	}
 
 	return pattern.MatchString(left.(string)), nil
@@ -289,12 +325,70 @@ func typeConvertParams(method reflect.Value, params []reflect.Value) ([]reflect.
 	return params, nil
 }
 
+// accessor lookups (struct field index path or method index) keyed on the
+// (type, name) pair are stable for the lifetime of a process; cache them so
+// each Eval avoids the cost of FieldByName / MethodByName.
+var accessorLookupCache sync.Map // map[accessorLookupKey]accessorLookupResult
+
+type accessorLookupKey struct {
+	t    reflect.Type
+	name string
+}
+
+type accessorLookupKind uint8
+
+const (
+	accessorLookupNone accessorLookupKind = iota
+	accessorLookupField
+	accessorLookupMethod    // method on the value type
+	accessorLookupPtrMethod // method only present on the pointer type
+)
+
+type accessorLookupResult struct {
+	kind     accessorLookupKind
+	fieldIdx []int // populated when kind == accessorLookupField (supports embedded structs)
+	mIdx     int   // populated when kind is one of the method kinds
+}
+
+func resolveAccessor(valueType, ptrType reflect.Type, name string) accessorLookupResult {
+	key := accessorLookupKey{t: valueType, name: name}
+	if cached, ok := accessorLookupCache.Load(key); ok {
+		return cached.(accessorLookupResult)
+	}
+
+	var result accessorLookupResult
+	if valueType.Kind() == reflect.Struct {
+		if f, ok := valueType.FieldByName(name); ok {
+			result = accessorLookupResult{kind: accessorLookupField, fieldIdx: f.Index}
+			accessorLookupCache.Store(key, result)
+			return result
+		}
+	}
+	if m, ok := valueType.MethodByName(name); ok {
+		result = accessorLookupResult{kind: accessorLookupMethod, mIdx: m.Index}
+		accessorLookupCache.Store(key, result)
+		return result
+	}
+	if ptrType != nil {
+		if m, ok := ptrType.MethodByName(name); ok {
+			result = accessorLookupResult{kind: accessorLookupPtrMethod, mIdx: m.Index}
+			accessorLookupCache.Store(key, result)
+			return result
+		}
+	}
+	accessorLookupCache.Store(key, result) // negative cache
+	return result
+}
+
 func makeAccessorStage(pair []string) evaluationOperator {
 
 	reconstructed := strings.Join(pair, ".")
 
 	return func(left interface{}, right interface{}, parameters Parameters) (ret interface{}, err error) {
 
+		// stack-allocated buffer for the common case of <=4 method args; falls
+		// back to a heap slice only when the call has more arguments.
+		var paramsBuf [4]reflect.Value
 		var params []reflect.Value
 
 		value, err := parameters.Get(pair[0])
@@ -318,10 +412,12 @@ func makeAccessorStage(pair []string) evaluationOperator {
 			coreValue := reflect.ValueOf(value)
 
 			var corePtrVal reflect.Value
+			var corePtrType reflect.Type
 
 			// if this is a pointer, resolve it.
 			if coreValue.Kind() == reflect.Ptr {
 				corePtrVal = coreValue
+				corePtrType = coreValue.Type()
 				coreValue = coreValue.Elem()
 			}
 
@@ -329,39 +425,44 @@ func makeAccessorStage(pair []string) evaluationOperator {
 				return nil, errors.New("Unable to access '" + pair[i] + "', '" + pair[i-1] + "' is not a struct")
 			}
 
-			field := coreValue.FieldByName(pair[i])
-			if field != (reflect.Value{}) {
-				value = field.Interface()
+			lookup := resolveAccessor(coreValue.Type(), corePtrType, pair[i])
+
+			if lookup.kind == accessorLookupField {
+				value = coreValue.FieldByIndex(lookup.fieldIdx).Interface()
 				continue
 			}
 
-			method := coreValue.MethodByName(pair[i])
-			if method == (reflect.Value{}) {
-				if corePtrVal.IsValid() {
-					method = corePtrVal.MethodByName(pair[i])
-				}
-				if method == (reflect.Value{}) {
+			var method reflect.Value
+			switch lookup.kind {
+			case accessorLookupMethod:
+				method = coreValue.Method(lookup.mIdx)
+			case accessorLookupPtrMethod:
+				if !corePtrVal.IsValid() {
 					return nil, errors.New("No method or field '" + pair[i] + "' present on parameter '" + pair[i-1] + "'")
 				}
+				method = corePtrVal.Method(lookup.mIdx)
+			default:
+				return nil, errors.New("No method or field '" + pair[i] + "' present on parameter '" + pair[i-1] + "'")
 			}
 
-			switch right.(type) {
+			switch r := right.(type) {
 			case []interface{}:
-
-				givenParams := right.([]interface{})
-				params = make([]reflect.Value, len(givenParams))
-				for idx, _ := range givenParams {
-					params[idx] = reflect.ValueOf(givenParams[idx])
+				if len(r) <= len(paramsBuf) {
+					params = paramsBuf[:len(r)]
+				} else {
+					params = make([]reflect.Value, len(r))
+				}
+				for idx := range r {
+					params[idx] = reflect.ValueOf(r[idx])
 				}
 
 			default:
-
 				if right == nil {
-					params = []reflect.Value{}
+					params = paramsBuf[:0]
 					break
 				}
-
-				params = []reflect.Value{reflect.ValueOf(right.(interface{}))}
+				paramsBuf[0] = reflect.ValueOf(right)
+				params = paramsBuf[:1]
 			}
 
 			params, err = typeConvertParams(method, params)
