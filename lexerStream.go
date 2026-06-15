@@ -36,27 +36,37 @@ func newLexerStream(source string) *lexerStream {
 
 func (this *lexerStream) readCharacter() rune {
 	character := this.source[this.position]
+	width := utf8.RuneLen(character)
+	if character == utf8.RuneError {
+		_, width = utf8.DecodeRuneInString(this.sourceString[this.strPosition:])
+	}
 	this.position += 1
-	this.strPosition += utf8.RuneLen(character)
+	this.strPosition += width
 	return character
 }
 
 func (this *lexerStream) rewind(amount int) {
 	if amount < 0 {
-		this.position -= amount
-		this.strPosition -= amount
-	}
-	strAmount := 0
-	for i := 0; i < amount; i++ {
-		if this.position >= this.length {
-			strAmount += 1
-			this.position -= 1
-			continue
+		for i := 0; i > amount; i-- {
+			character := this.source[this.position]
+			width := utf8.RuneLen(character)
+			if character == utf8.RuneError {
+				_, width = utf8.DecodeRuneInString(this.sourceString[this.strPosition:])
+			}
+			this.position += 1
+			this.strPosition += width
 		}
-		strAmount += utf8.RuneLen(this.source[this.position-1])
-		this.position -= 1
+		return
 	}
-	this.strPosition -= strAmount
+	for i := 0; i < amount; i++ {
+		character := this.source[this.position-1]
+		width := utf8.RuneLen(character)
+		if character == utf8.RuneError {
+			_, width = utf8.DecodeLastRuneInString(this.sourceString[:this.strPosition])
+		}
+		this.position -= 1
+		this.strPosition -= width
+	}
 }
 
 func (this lexerStream) canRead() bool {
