@@ -456,6 +456,38 @@ func TestConstantParsing(test *testing.T) {
 	runTokenParsingTest(tokenParsingTests, test)
 }
 
+func TestUTF8Parsing(test *testing.T) {
+
+	testCases := []struct {
+		name  string
+		input []byte
+	}{
+		{"Multiple invalid UTF-8 bytes (nuclei#7462)", bytes.Repeat([]byte{0xff}, 7)},
+		{"Single invalid UTF-8 byte", []byte{0xff}},
+		{"Valid multibyte UTF-8 characters", []byte("界é\uFFFD")},
+		{"Truncated UTF-8 sequence", []byte{0xe2, 0x82}},
+	}
+
+	for _, testCase := range testCases {
+		test.Run(testCase.name, func(test *testing.T) {
+			expressionString := "\"" + string(testCase.input) + "\"+aaaaaaaaaa"
+			expression, err := NewEvaluableExpressionWithFunctions(expressionString, nil)
+			if err != nil {
+				test.Fatalf("Failed to parse expression: %v", err)
+			}
+
+			expected := []ExpressionToken{
+				{Kind: STRING, Value: string(bytes.Runes(testCase.input))},
+				{Kind: MODIFIER, Value: "+"},
+				{Kind: VARIABLE, Value: "aaaaaaaaaa"},
+			}
+			if tokens := expression.Tokens(); !reflect.DeepEqual(tokens, expected) {
+				test.Errorf("Expected tokens %#v, found %#v", expected, tokens)
+			}
+		})
+	}
+}
+
 func TestLogicalOperatorParsing(test *testing.T) {
 
 	tokenParsingTests := []TokenParsingTest{
