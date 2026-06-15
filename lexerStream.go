@@ -46,8 +46,13 @@ func (this *lexerStream) readCharacter() rune {
 }
 
 func (this *lexerStream) rewind(amount int) {
+	// A negative amount seeks forward, re-consuming runes. Decode each rune's
+	// real byte width so the byte cursor stays in sync with invalid UTF-8.
 	if amount < 0 {
 		for i := 0; i > amount; i-- {
+			if this.position >= this.length {
+				break
+			}
 			character := this.source[this.position]
 			width := utf8.RuneLen(character)
 			if character == utf8.RuneError {
@@ -59,6 +64,9 @@ func (this *lexerStream) rewind(amount int) {
 		return
 	}
 	for i := 0; i < amount; i++ {
+		if this.position <= 0 {
+			break
+		}
 		character := this.source[this.position-1]
 		width := utf8.RuneLen(character)
 		if character == utf8.RuneError {
