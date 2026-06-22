@@ -16,7 +16,6 @@ var (
 	hello  = "hello"
 	empty  struct{}
 	empty2 *string
-	empty3 *int
 
 	values = []interface{}{
 		-1,
@@ -113,9 +112,7 @@ const (
 	SEED       = 1487873697990155515
 )
 
-func init() {
-	rand.Seed(SEED)
-}
+var rng = rand.New(rand.NewSource(SEED))
 
 func TestPanics(test *testing.T) {
 
@@ -129,7 +126,7 @@ func TestPanics(test *testing.T) {
 
 	for i := 0; i < ITERATIONS; i++ {
 
-		num := rand.Intn(3) + 2
+		num := rng.Intn(3) + 2
 		expression := ""
 
 		for n := 0; n < num; n++ {
@@ -171,6 +168,6 @@ func checkPanic(expression string, test *testing.T) {
 
 func getRandom(haystack []interface{}) interface{} {
 
-	i := rand.Intn(len(haystack))
+	i := rng.Intn(len(haystack))
 	return haystack[i]
 }

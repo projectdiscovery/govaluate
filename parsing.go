@@ -466,10 +466,6 @@ func checkBalance(tokens []ExpressionToken) error {
 	return nil
 }
 
-func isDigit(character rune) bool {
-	return unicode.IsDigit(character)
-}
-
 func isHexDigit(character rune) bool {
 
 	character = unicode.ToLower(character)
