@@ -979,7 +979,7 @@ func TestComparatorParsing(test *testing.T) {
 	tokenParsingTests = combineWhitespaceExpressions(tokenParsingTests)
 	// The white space actually matters for this test...
 	tokenParsingTests = append(tokenParsingTests, TokenParsingTest{
-		Name:  "Cyrilic characters Array membership",
+		Name:  "Cyrillic characters Array membership",
 		Input: `!(переменная IN ("Н11", "Н12","Н13","Н14"))`,
 		Expected: []ExpressionToken{
 			{
@@ -1232,7 +1232,7 @@ func TestModifierParsing(test *testing.T) {
 			},
 		},
 		{
-			Name:  "Single cyrilic parameter with op",
+			Name:  "Single cyrillic parameter with op",
 			Input: "переменная * 1",
 			Expected: []ExpressionToken{
 				{
@@ -1531,7 +1531,7 @@ func TestTernaryParsing(test *testing.T) {
 		},
 		TokenParsingTest{
 
-			Name:  "Ternary after Comperator",
+			Name:  "Ternary after Comparator",
 			Input: "1 == 0 ? true",
 			Expected: []ExpressionToken{
 				ExpressionToken{
@@ -1581,7 +1581,7 @@ func TestTernaryParsing(test *testing.T) {
 }
 
 /*
-Tests to make sure that the String() reprsentation of an expression exactly matches what is given to the parse function.
+Tests to make sure that the String() representation of an expression exactly matches what is given to the parse function.
 */
 func TestOriginalString(test *testing.T) {
 
@@ -1607,7 +1607,7 @@ func TestOriginalString(test *testing.T) {
 }
 
 /*
-Tests to make sure that the Vars() reprsentation of an expression identifies all variables contained within the expression.
+Tests to make sure that the Vars() representation of an expression identifies all variables contained within the expression.
 */
 func TestOriginalVars(test *testing.T) {
 
@@ -1650,9 +1650,8 @@ func TestOriginalVars(test *testing.T) {
 func combineWhitespaceExpressions(testCases []TokenParsingTest) []TokenParsingTest {
 
 	var currentCase, strippedCase TokenParsingTest
-	var caseLength int
 
-	caseLength = len(testCases)
+	caseLength := len(testCases)
 
 	for i := 0; i < caseLength; i++ {
 

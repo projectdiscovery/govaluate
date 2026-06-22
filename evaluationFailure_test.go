@@ -11,7 +11,6 @@ import (
 )
 
 type DebugStruct struct {
-	x int
 }
 
 /*
@@ -26,7 +25,7 @@ type EvaluationFailureTest struct {
 }
 
 const (
-	INVALID_MODIFIER_TYPES   string = "cannot be used with the modifier"
+	INVALID_MODIFIER_TYPES   = "cannot be used with the modifier"
 	INVALID_COMPARATOR_TYPES        = "cannot be used with the comparator"
 	INVALID_LOGICALOP_TYPES         = "cannot be used with the logical operator"
 	INVALID_TERNARY_TYPES           = "cannot be used with the ternary operator"
@@ -89,8 +88,8 @@ func TestStructParameter(t *testing.T) {
 
 func TestNilParameterUsage(test *testing.T) {
 
-	expression, err := NewEvaluableExpression("2 > 1")
-	_, err = expression.Evaluate(nil)
+	expression, _ := NewEvaluableExpression("2 > 1")
+	_, err := expression.Evaluate(nil)
 
 	if err != nil {
 		test.Errorf("Expected no error from nil parameter evaluation, got %v\n", err)

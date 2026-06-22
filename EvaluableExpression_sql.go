@@ -91,7 +91,7 @@ func (this EvaluableExpression) findNextSQLString(stream *tokenStream, transacti
 		case NREQ:
 			ret = "NOT RLIKE"
 		default:
-			ret = fmt.Sprintf("%s", token.Value.(string))
+			ret = token.Value.(string)
 		}
 
 	case TERNARY:
@@ -116,7 +116,7 @@ func (this EvaluableExpression) findNextSQLString(stream *tokenStream, transacti
 		switch prefixSymbols[token.Value.(string)] {
 
 		case INVERT:
-			ret = fmt.Sprintf("NOT")
+			ret = "NOT"
 		default:
 
 			right, err := this.findNextSQLString(stream, transactions)
@@ -149,7 +149,7 @@ func (this EvaluableExpression) findNextSQLString(stream *tokenStream, transacti
 
 			ret = fmt.Sprintf("MOD(%s, %s)", left, right)
 		default:
-			ret = fmt.Sprintf("%s", token.Value.(string))
+			ret = token.Value.(string)
 		}
 	case CLAUSE:
 		ret = "("
