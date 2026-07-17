@@ -97,6 +97,46 @@ func TestNilParameterUsage(test *testing.T) {
 	}
 }
 
+func TestEvaluateStageInvariantErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		expr     EvaluableExpression
+		stage    *evaluationStage
+		contains string
+	}{
+		{
+			name: "NilStage",
+			expr: EvaluableExpression{
+				inputExpression: "1 == 1",
+			},
+			stage:    nil,
+			contains: "invalid evaluation stage with nil stage",
+		},
+		{
+			name: "NilOperator",
+			expr: EvaluableExpression{
+				inputExpression: "foo == bar",
+			},
+			stage: &evaluationStage{
+				symbol: OR,
+			},
+			contains: "invalid evaluation stage for expression 'foo == bar': nil operator at symbol '||'",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.expr.evaluateStage(tc.stage, DUMMY_PARAMETERS)
+			if err == nil {
+				t.Fatalf("Expected error, received none")
+			}
+			if !strings.Contains(err.Error(), tc.contains) {
+				t.Fatalf("Unexpected error: %s", err.Error())
+			}
+		})
+	}
+}
+
 func TestModifierTyping(test *testing.T) {
 
 	evaluationTests := []EvaluationFailureTest{

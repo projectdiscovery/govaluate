@@ -179,6 +179,9 @@ func (this EvaluableExpression) Eval(parameters Parameters) (interface{}, error)
 }
 
 func (this EvaluableExpression) evaluateStage(stage *evaluationStage, parameters Parameters) (interface{}, error) {
+	if stage == nil {
+		return nil, errors.New("invalid evaluation stage with nil stage")
+	}
 
 	var left, right interface{}
 	var err error
@@ -244,6 +247,9 @@ func (this EvaluableExpression) evaluateStage(stage *evaluationStage, parameters
 		}
 	}
 
+	if stage.operator == nil {
+		return nil, fmt.Errorf("invalid evaluation stage for expression '%v': nil operator at symbol '%v'", this.inputExpression, stage.symbol.String())
+	}
 	return stage.operator(left, right, parameters)
 }
 
