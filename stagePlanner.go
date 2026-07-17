@@ -193,7 +193,26 @@ func planStages(tokens []ExpressionToken) (*evaluationStage, error) {
 	reorderStages(stage)
 
 	stage = elideLiterals(stage)
+
+	if err := validateEvaluationStages(stage); err != nil {
+		return nil, err
+	}
 	return stage, nil
+}
+
+// validateEvaluationStages walks a planned stage tree and rejects any stage
+// missing an operator. Empty expressions (nil root) are valid.
+func validateEvaluationStages(stage *evaluationStage) error {
+	if stage == nil {
+		return nil
+	}
+	if stage.operator == nil {
+		return fmt.Errorf("unable to plan expression: nil operator for symbol '%v'", stage.symbol.String())
+	}
+	if err := validateEvaluationStages(stage.leftStage); err != nil {
+		return err
+	}
+	return validateEvaluationStages(stage.rightStage)
 }
 
 func planTokens(stream *tokenStream) (*evaluationStage, error) {
@@ -272,12 +291,17 @@ func planPrecedenceLevel(
 
 		checks = findTypeChecks(symbol)
 
+		operator := stageSymbolMap[symbol]
+		if operator == nil {
+			return nil, fmt.Errorf("unable to plan symbol: '%v'", symbol.String())
+		}
+
 		s := &evaluationStage{
 
 			symbol:     symbol,
 			leftStage:  leftStage,
 			rightStage: rightStage,
-			operator:   stageSymbolMap[symbol],
+			operator:   operator,
 
 			leftTypeCheck:   checks.left,
 			rightTypeCheck:  checks.right,

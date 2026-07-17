@@ -97,6 +97,135 @@ func TestNilParameterUsage(test *testing.T) {
 	}
 }
 
+func TestEvaluateStageInvariantErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		expr     EvaluableExpression
+		stage    *evaluationStage
+		contains string
+	}{
+		{
+			name: "NilStage",
+			expr: EvaluableExpression{
+				inputExpression: "1 == 1",
+			},
+			stage:    nil,
+			contains: "invalid evaluation stage for expression '1 == 1': nil stage",
+		},
+		{
+			name: "NilOperator",
+			expr: EvaluableExpression{
+				inputExpression: "foo == bar",
+			},
+			stage: &evaluationStage{
+				symbol: OR,
+			},
+			contains: "invalid evaluation stage for expression 'foo == bar': nil operator at symbol '||'",
+		},
+		{
+			name: "NilOperatorInChild",
+			expr: EvaluableExpression{
+				inputExpression: "a || b",
+			},
+			stage: &evaluationStage{
+				symbol:   OR,
+				operator: orStage,
+				leftStage: &evaluationStage{
+					symbol: VALUE,
+				},
+			},
+			contains: "nil operator at symbol 'VALUE'",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.expr.evaluateStage(tc.stage, DUMMY_PARAMETERS)
+			if err == nil {
+				t.Fatalf("Expected error, received none")
+			}
+			if !strings.Contains(err.Error(), tc.contains) {
+				t.Fatalf("Unexpected error: %s", err.Error())
+			}
+		})
+	}
+}
+
+func TestValidateEvaluationStages(t *testing.T) {
+	t.Run("NilRoot", func(t *testing.T) {
+		if err := validateEvaluationStages(nil); err != nil {
+			t.Fatalf("Expected nil root to be valid, got %v", err)
+		}
+	})
+
+	t.Run("ValidTree", func(t *testing.T) {
+		stage := &evaluationStage{
+			symbol:   OR,
+			operator: orStage,
+			leftStage: &evaluationStage{
+				symbol:   VALUE,
+				operator: makeLiteralStage(true),
+			},
+			rightStage: &evaluationStage{
+				symbol:   VALUE,
+				operator: makeLiteralStage(false),
+			},
+		}
+		if err := validateEvaluationStages(stage); err != nil {
+			t.Fatalf("Expected valid tree, got %v", err)
+		}
+	})
+
+	t.Run("NilOperator", func(t *testing.T) {
+		stage := &evaluationStage{
+			symbol: AND,
+		}
+		err := validateEvaluationStages(stage)
+		if err == nil {
+			t.Fatalf("Expected error for nil operator")
+		}
+		if !strings.Contains(err.Error(), "nil operator for symbol") {
+			t.Fatalf("Unexpected error: %s", err.Error())
+		}
+	})
+
+	t.Run("NilOperatorNested", func(t *testing.T) {
+		stage := &evaluationStage{
+			symbol:   AND,
+			operator: andStage,
+			rightStage: &evaluationStage{
+				symbol: EQ,
+			},
+		}
+		err := validateEvaluationStages(stage)
+		if err == nil {
+			t.Fatalf("Expected error for nested nil operator")
+		}
+		if !strings.Contains(err.Error(), "nil operator for symbol") {
+			t.Fatalf("Unexpected error: %s", err.Error())
+		}
+	})
+}
+
+func TestPlanStagesProducesValidOperators(t *testing.T) {
+	// Sanity: a normal expression plans cleanly and keeps operators non-nil.
+	expr, err := NewEvaluableExpression("1 + 2 == 3 && true")
+	if err != nil {
+		t.Fatalf("Unexpected plan error: %v", err)
+	}
+	if err := validateEvaluationStages(expr.evaluationStages); err != nil {
+		t.Fatalf("Planned stages failed validation: %v", err)
+	}
+
+	result, err := expr.Evaluate(nil)
+	if err != nil {
+		t.Fatalf("Unexpected eval error: %v", err)
+	}
+	if result != true {
+		t.Fatalf("Unexpected result: %v", result)
+	}
+}
+
 func TestModifierTyping(test *testing.T) {
 
 	evaluationTests := []EvaluationFailureTest{
