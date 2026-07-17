@@ -14,8 +14,10 @@ const (
 	logicalErrorFormat    string = "Value '%v' cannot be used with the logical operator '%v', it is not a bool"
 	modifierErrorFormat   string = "Value '%v' cannot be used with the modifier '%v', it is not a number"
 	comparatorErrorFormat string = "Value '%v' cannot be used with the comparator '%v', it is not a number"
+	regexErrorFormat      string = "Value '%v' cannot be used with the comparator '%v', it is not a string/pattern"
 	ternaryErrorFormat    string = "Value '%v' cannot be used with the ternary operator '%v', it is not a bool"
 	prefixErrorFormat     string = "Value '%v' cannot be used with the prefix '%v'"
+	arrayErrorFormat      string = "Value '%v' cannot be used with the comparator '%v', it is not an array"
 )
 
 type evaluationOperator func(left interface{}, right interface{}, parameters Parameters) (interface{}, error)
@@ -216,10 +218,20 @@ func regexStage(left interface{}, right interface{}, parameters Parameters) (int
 			return nil, fmt.Errorf("Unable to compile regexp pattern '%v': %v", right, err)
 		}
 	case *regexp.Regexp:
+		if r == nil {
+			return nil, errors.New("Unable to compare with nil regexp pattern")
+		}
 		pattern = r
+	default:
+		return nil, fmt.Errorf("Value '%v' cannot be used with the comparator '=~', it is not a string/pattern", right)
 	}
 
-	return pattern.MatchString(left.(string)), nil
+	leftString, ok := left.(string)
+	if !ok {
+		return nil, fmt.Errorf("Value '%v' cannot be used with the comparator '=~', it is not a string", left)
+	}
+
+	return pattern.MatchString(leftString), nil
 }
 
 func notRegexStage(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
@@ -401,7 +413,7 @@ func makeAccessorStage(pair []string) evaluationOperator {
 		// therefore every call to an accessor sets up a defer that tries to recover from panics, converting them to errors.
 		defer func() {
 			if r := recover(); r != nil {
-				errorMsg := fmt.Sprintf("Failed to access '%s': %v", reconstructed, r.(string))
+				errorMsg := fmt.Sprintf("Failed to access '%s': %v", reconstructed, r)
 				err = errors.New(errorMsg)
 				ret = nil
 			}
@@ -531,8 +543,29 @@ func separatorStage(left interface{}, right interface{}, parameters Parameters) 
 
 func inStage(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
 
-	for _, value := range right.([]interface{}) {
-		value = castToFloat64(value)
+	if right == nil {
+		return false, nil
+	}
+
+	// Fast path for the planner's native collection type.
+	if values, ok := right.([]interface{}); ok {
+		for _, value := range values {
+			value = castToFloat64(value)
+			if left == value {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	rv := reflect.ValueOf(right)
+	kind := rv.Kind()
+	if kind != reflect.Slice && kind != reflect.Array {
+		return nil, fmt.Errorf("Value '%v' cannot be used with the comparator 'in', it is not an array", right)
+	}
+
+	for i := 0; i < rv.Len(); i++ {
+		value := castToFloat64(rv.Index(i).Interface())
 		if left == value {
 			return true, nil
 		}
@@ -553,11 +586,11 @@ func isString(value interface{}) bool {
 
 func isRegexOrString(value interface{}) bool {
 
-	switch value.(type) {
+	switch v := value.(type) {
 	case string:
 		return true
 	case *regexp.Regexp:
-		return true
+		return v != nil
 	}
 	return false
 }
@@ -609,11 +642,15 @@ func comparatorTypeCheck(left interface{}, right interface{}) bool {
 }
 
 func isArray(value interface{}) bool {
+	if value == nil {
+		return false
+	}
 	switch value.(type) {
 	case []interface{}:
 		return true
 	}
-	return false
+	kind := reflect.TypeOf(value).Kind()
+	return kind == reflect.Slice || kind == reflect.Array
 }
 
 /*

@@ -184,9 +184,19 @@ func planStages(tokens []ExpressionToken) (*evaluationStage, error) {
 
 	stage, err := planTokens(stream)
 	if err != nil {
+		stream.close()
 		return nil, err
 	}
+	if stream.hasNext() {
+		token := stream.next()
+		stream.close()
+		return nil, fmt.Errorf("unable to plan token kind: '%s', value: '%v'", token.Kind.String(), token.Value)
+	}
 	stream.close()
+
+	if len(tokens) > 0 && stage == nil {
+		return nil, errors.New("unable to plan expression: no evaluation stages produced")
+	}
 
 	// while we're now fully-planned, we now need to re-order same-precedence operators.
 	// this could probably be avoided with a different planning method
@@ -266,6 +276,7 @@ func planPrecedenceLevel(
 			}
 
 			if !keyFound {
+				stream.rewind()
 				break
 			}
 		}
@@ -273,11 +284,13 @@ func planPrecedenceLevel(
 		if validSymbols != nil {
 
 			if !isString(token.Value) {
+				stream.rewind()
 				break
 			}
 
 			symbol, keyFound = validSymbols[token.Value.(string)]
 			if !keyFound {
+				stream.rewind()
 				break
 			}
 		}
@@ -296,6 +309,14 @@ func planPrecedenceLevel(
 			return nil, fmt.Errorf("unable to plan symbol: '%v'", symbol.String())
 		}
 
+		errorFormat := typeErrorFormat
+		switch symbol {
+		case REQ, NREQ:
+			errorFormat = regexErrorFormat
+		case IN:
+			errorFormat = arrayErrorFormat
+		}
+
 		s := &evaluationStage{
 
 			symbol:     symbol,
@@ -306,13 +327,12 @@ func planPrecedenceLevel(
 			leftTypeCheck:   checks.left,
 			rightTypeCheck:  checks.right,
 			typeCheck:       checks.combined,
-			typeErrorFormat: typeErrorFormat,
+			typeErrorFormat: errorFormat,
 		}
 		s.finalize()
 		return s, nil
 	}
 
-	stream.rewind()
 	return leftStage, nil
 }
 
@@ -337,11 +357,16 @@ func planFunction(stream *tokenStream) (*evaluationStage, error) {
 		return nil, err
 	}
 
+	function, ok := token.Value.(ExpressionFunction)
+	if !ok || function == nil {
+		return nil, fmt.Errorf("unable to plan FUNCTION token with value type %T", token.Value)
+	}
+
 	s := &evaluationStage{
 
 		symbol:          FUNCTIONAL,
 		rightStage:      rightStage,
-		operator:        makeFunctionStage(token.Value.(ExpressionFunction)),
+		operator:        makeFunctionStage(function),
 		typeErrorFormat: "Unable to run function '%v': %v",
 	}
 	s.finalize()
@@ -384,11 +409,16 @@ func planAccessor(stream *tokenStream) (*evaluationStage, error) {
 		}
 	}
 
+	pair, ok := token.Value.([]string)
+	if !ok || len(pair) == 0 {
+		return nil, fmt.Errorf("unable to plan ACCESSOR token with value type %T", token.Value)
+	}
+
 	s := &evaluationStage{
 
 		symbol:          ACCESS,
 		rightStage:      rightStage,
-		operator:        makeAccessorStage(token.Value.([]string)),
+		operator:        makeAccessorStage(pair),
 		typeErrorFormat: "Unable to access parameter field or method '%v': %v",
 	}
 	s.finalize()
@@ -428,17 +458,29 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 
 		// clauses with single elements don't trigger SEPARATE stage planner
 		// this ensures that when used as part of an "in" comparison, the array requirement passes
-		if prev.Kind == COMPARATOR && prev.Value == "in" && ret.symbol == LITERAL {
-			// We need to copy this in case we are using the cached value...
-			tmp := *ret
-			tmp.operator = ensureSliceStage(ret.operator)
-			ret = &tmp
+		if prev.Kind == COMPARATOR && prev.Value == "in" {
+			if ret == nil {
+				// empty collection: `in ()`
+				ret = &evaluationStage{
+					symbol:   LITERAL,
+					operator: makeLiteralStage([]interface{}{}),
+				}
+				ret.finalize()
+			} else if ret.symbol == LITERAL {
+				// We need to copy this in case we are using the cached value...
+				tmp := *ret
+				tmp.operator = ensureSliceStage(ret.operator)
+				ret = &tmp
+			}
 		}
 
 		// advance past the CLAUSE_CLOSE token. We know that it's a CLAUSE_CLOSE, because at parse-time we check for unbalanced parens.
+		if !stream.hasNext() {
+			return nil, errors.New("unable to plan expression: missing closing clause")
+		}
 		stream.next()
 
-		// the stage we got represents all of the logic contained within the parens
+		// the stage we got represents all the logic contained within the parens
 		// but for technical reasons, we need to wrap this stage in a "noop" stage which breaks long chains of precedence.
 		// see github #33.
 		ret = &evaluationStage{
@@ -458,7 +500,11 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 		return nil, nil
 
 	case VARIABLE:
-		return getParameterStage(token.Value.(string))
+		name, ok := token.Value.(string)
+		if !ok {
+			return nil, fmt.Errorf("unable to plan VARIABLE token with value type %T", token.Value)
+		}
+		return getParameterStage(name)
 
 	case NUMERIC:
 		fallthrough
@@ -469,7 +515,11 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 	case BOOLEAN:
 		return getConstantStage(token.Value)
 	case TIME:
-		return getConstantStage(float64(token.Value.(time.Time).Unix()))
+		tokenTime, ok := token.Value.(time.Time)
+		if !ok {
+			return nil, fmt.Errorf("unable to plan TIME token with value type %T", token.Value)
+		}
+		return getConstantStage(float64(tokenTime.Unix()))
 
 	case PREFIX:
 		stream.rewind()
@@ -600,6 +650,10 @@ func findTypeChecks(symbol OperatorSymbol) typeChecks {
 */
 func reorderStages(rootStage *evaluationStage) {
 
+	if rootStage == nil {
+		return
+	}
+
 	// traverse every rightStage until we find multiples in a row of the same precedence.
 	var identicalPrecedences []*evaluationStage
 	var currentStage, nextStage *evaluationStage
@@ -691,6 +745,10 @@ func mirrorStageSubtree(stages []*evaluationStage) {
 	Recurses through all operators in the entire tree, eliding operators where both sides are literals.
 */
 func elideLiterals(root *evaluationStage) *evaluationStage {
+
+	if root == nil {
+		return nil
+	}
 
 	if root.leftStage != nil {
 		root.leftStage = elideLiterals(root.leftStage)

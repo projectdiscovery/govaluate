@@ -292,7 +292,11 @@ func (this EvaluableExpression) Vars() []string {
 	var varlist []string
 	for _, val := range this.Tokens() {
 		if val.Kind == VARIABLE {
-			varlist = append(varlist, val.Value.(string))
+			name, ok := val.Value.(string)
+			if !ok {
+				continue
+			}
+			varlist = append(varlist, name)
 		}
 	}
 	return varlist
