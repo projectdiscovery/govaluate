@@ -437,3 +437,32 @@ func TestSQLTruncatedExponent(t *testing.T) {
 		t.Fatalf("expected error for truncated exponent expression")
 	}
 }
+
+func TestNestedTernaryRightAssociative(t *testing.T) {
+	tests := []struct {
+		expr string
+		want interface{}
+	}{
+		{"true ? 1 : true ? 2 : 3", 1.0},
+		{"false ? 1 : true ? 2 : 3", 2.0},
+		{"false ? true ? 1 : 2 : 3", 3.0},
+		{"true ? false ? 1 : 2 : 3", 2.0},
+		{"true ? 10", 10.0},
+		{"false ? 10", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.expr, func(t *testing.T) {
+			expr, err := NewEvaluableExpression(tc.expr)
+			if err != nil {
+				t.Fatalf("plan error: %v", err)
+			}
+			got, err := expr.Evaluate(nil)
+			if err != nil {
+				t.Fatalf("eval error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}

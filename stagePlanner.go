@@ -131,12 +131,7 @@ func init() {
 		typeErrorFormat: logicalErrorFormat,
 		next:            planLogicalAnd,
 	})
-	planTernary = makePrecedentFromPlanner(&precedencePlanner{
-		validSymbols:    ternarySymbols,
-		validKinds:      []TokenKind{TERNARY},
-		typeErrorFormat: ternaryErrorFormat,
-		next:            planLogicalOr,
-	})
+	planTernary = planTernaryExpression
 	planSeparator = makePrecedentFromPlanner(&precedencePlanner{
 		validSymbols: separatorSymbols,
 		validKinds:   []TokenKind{SEPARATOR},
@@ -232,6 +227,124 @@ func planTokens(stream *tokenStream) (*evaluationStage, error) {
 	}
 
 	return planSeparator(stream)
+}
+
+// planTernaryExpression parses ternaries and null-coalescing with right associativity
+// so that `a ? b : c ? d : e` becomes `a ? b : (c ? d : e)`.
+// A trailing ':' is optional (`true ? 10`), matching historical govaluate behavior.
+func planTernaryExpression(stream *tokenStream) (*evaluationStage, error) {
+	return planTernaryExpressionMode(stream, true)
+}
+
+func planTernaryExpressionMode(stream *tokenStream, allowBareColon bool) (*evaluationStage, error) {
+
+	left, err := planLogicalOr(stream)
+	if err != nil {
+		return nil, err
+	}
+
+	for stream.hasNext() {
+
+		token := stream.next()
+		if token.Kind != TERNARY || !isString(token.Value) {
+			stream.rewind()
+			break
+		}
+
+		symbol, ok := ternarySymbols[token.Value.(string)]
+		if !ok {
+			stream.rewind()
+			break
+		}
+
+		switch symbol {
+		case COALESCE:
+			// Coalesce binds tighter than ?: so its RHS stops at logical-or;
+			// that lets `a ?? b ? c : d` parse as `(a ?? b) ? c : d`.
+			right, err := planLogicalOr(stream)
+			if err != nil {
+				return nil, err
+			}
+			s := &evaluationStage{
+				symbol:          COALESCE,
+				leftStage:       left,
+				rightStage:      right,
+				operator:        stageSymbolMap[COALESCE],
+				typeErrorFormat: ternaryErrorFormat,
+			}
+			s.finalize()
+			left = s
+			continue
+
+		case TERNARY_TRUE:
+			// Middle branch may itself be a ternary, but must not treat the outer
+			// ':' as a bare colon operator.
+			trueBranch, err := planTernaryExpressionMode(stream, false)
+			if err != nil {
+				return nil, err
+			}
+
+			checks := findTypeChecks(TERNARY_TRUE)
+			ifStage := &evaluationStage{
+				symbol:          TERNARY_TRUE,
+				leftStage:       left,
+				rightStage:      trueBranch,
+				operator:        stageSymbolMap[TERNARY_TRUE],
+				leftTypeCheck:   checks.left,
+				rightTypeCheck:  checks.right,
+				typeCheck:       checks.combined,
+				typeErrorFormat: ternaryErrorFormat,
+			}
+			ifStage.finalize()
+
+			if stream.hasNext() {
+				colon := stream.next()
+				if colon.Kind == TERNARY && colon.Value == ":" {
+					falseBranch, err := planTernaryExpressionMode(stream, allowBareColon)
+					if err != nil {
+						return nil, err
+					}
+					elseStage := &evaluationStage{
+						symbol:          TERNARY_FALSE,
+						leftStage:       ifStage,
+						rightStage:      falseBranch,
+						operator:        stageSymbolMap[TERNARY_FALSE],
+						typeErrorFormat: ternaryErrorFormat,
+					}
+					elseStage.finalize()
+					return elseStage, nil
+				}
+				stream.rewind()
+			}
+			return ifStage, nil
+
+		case TERNARY_FALSE:
+			if !allowBareColon {
+				stream.rewind()
+				return left, nil
+			}
+			// Allow a lone `:`, matching historical behavior for expressions like `false : 1`.
+			right, err := planTernaryExpressionMode(stream, allowBareColon)
+			if err != nil {
+				return nil, err
+			}
+			s := &evaluationStage{
+				symbol:          TERNARY_FALSE,
+				leftStage:       left,
+				rightStage:      right,
+				operator:        stageSymbolMap[TERNARY_FALSE],
+				typeErrorFormat: ternaryErrorFormat,
+			}
+			s.finalize()
+			return s, nil
+
+		default:
+			stream.rewind()
+			return left, nil
+		}
+	}
+
+	return left, nil
 }
 
 /*
@@ -762,6 +875,17 @@ func reorderStages(rootStage *evaluationStage) {
 		}
 
 		currentPrecedence = findOperatorPrecedenceForSymbol(currentStage.symbol)
+
+		// Ternary/coalesce are planned right-associatively; mirroring would undo that.
+		switch currentStage.symbol {
+		case TERNARY_TRUE, TERNARY_FALSE, COALESCE:
+			if len(identicalPrecedences) > 1 {
+				mirrorStageSubtree(identicalPrecedences)
+			}
+			identicalPrecedences = nil
+			precedence = currentPrecedence
+			continue
+		}
 
 		if currentPrecedence == precedence {
 			identicalPrecedences = append(identicalPrecedences, currentStage)
