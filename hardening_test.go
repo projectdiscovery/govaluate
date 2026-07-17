@@ -316,3 +316,124 @@ func TestCacheUnhashableConstant(t *testing.T) {
 	// May error during planning/eval depending on build tags; must not panic.
 	_ = err
 }
+
+func TestInSingleParameterClause(t *testing.T) {
+	expr, err := NewEvaluableExpression("1 in (a)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(map[string]interface{}{"a": 1.0})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != true {
+		t.Fatalf("expected true, got %v", result)
+	}
+}
+
+func TestFunctionNilArgNotDropped(t *testing.T) {
+	expr, err := NewEvaluableExpressionWithFunctions("f(a)", map[string]ExpressionFunction{
+		"f": func(args ...interface{}) (interface{}, error) {
+			return len(args), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(map[string]interface{}{"a": nil})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != 1 {
+		t.Fatalf("expected 1 arg, got %v", result)
+	}
+}
+
+func TestFunctionSliceArgNotSpread(t *testing.T) {
+	expr, err := NewEvaluableExpressionWithFunctions("f(a)", map[string]ExpressionFunction{
+		"f": func(args ...interface{}) (interface{}, error) {
+			return len(args), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(map[string]interface{}{"a": []interface{}{1, 2, 3}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != 1 {
+		t.Fatalf("expected 1 arg, got %v", result)
+	}
+}
+
+func TestFunctionPanicBecomesError(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+	expr, err := NewEvaluableExpressionWithFunctions("boom()", map[string]ExpressionFunction{
+		"boom": func(args ...interface{}) (interface{}, error) {
+			panic("boom")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = expr.Evaluate(nil)
+	if err == nil {
+		t.Fatalf("expected error from function panic")
+	}
+}
+
+func TestAccessorArgsNotAbsorbTrailingOperators(t *testing.T) {
+	expr, err := NewEvaluableExpression("foo.FuncArgStr('boop') + 'hi'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(map[string]interface{}{"foo": dummyParameterInstance})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "boophi" {
+		t.Fatalf("expected boophi, got %#v", result)
+	}
+}
+
+func TestFromTokensNumericIntCoerced(t *testing.T) {
+	expr, err := NewEvaluableExpressionFromTokens([]ExpressionToken{
+		{Kind: NUMERIC, Value: 1},
+		{Kind: MODIFIER, Value: "+"},
+		{Kind: NUMERIC, Value: 2.0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != 3.0 {
+		t.Fatalf("expected 3, got %v", result)
+	}
+}
+
+func TestSQLTruncatedExponent(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+	expr := EvaluableExpression{
+		QueryDateFormat: isoDateFormat,
+		tokens: []ExpressionToken{
+			{Kind: NUMERIC, Value: 2.0},
+			{Kind: MODIFIER, Value: "**"},
+		},
+	}
+	_, err := expr.ToSQLQuery()
+	if err == nil {
+		t.Fatalf("expected error for truncated exponent expression")
+	}
+}

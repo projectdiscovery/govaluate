@@ -397,12 +397,42 @@ func planAccessor(stream *tokenStream) (*evaluationStage, error) {
 
 		otherToken = stream.next()
 		if otherToken.Kind == CLAUSE {
-
-			stream.rewind()
-
-			rightStage, err = planTokens(stream)
-			if err != nil {
-				return nil, err
+			// Parse only the tokens inside the parentheses. Starting planTokens on
+			// the CLAUSE token itself would climb the full precedence chain and
+			// incorrectly absorb trailing operators (e.g. `foo.Bar(1) + 2`).
+			if !stream.hasNext() {
+				return nil, errors.New("unable to plan expression: missing closing clause")
+			}
+			if stream.tokens[stream.index].Kind == CLAUSE_CLOSE {
+				stream.next()
+				rightStage = &evaluationStage{
+					symbol:   LITERAL,
+					operator: makeLiteralStage(collectedArgs{}),
+				}
+				rightStage.finalize()
+			} else {
+				rightStage, err = planTokens(stream)
+				if err != nil {
+					return nil, err
+				}
+				if !stream.hasNext() {
+					return nil, errors.New("unable to plan expression: missing closing clause")
+				}
+				closing := stream.next()
+				if closing.Kind != CLAUSE_CLOSE {
+					return nil, fmt.Errorf("unable to plan expression: expected closing clause, got %s", closing.Kind.String())
+				}
+				if rightStage == nil {
+					rightStage = &evaluationStage{
+						symbol:   LITERAL,
+						operator: makeLiteralStage(collectedArgs{}),
+					}
+					rightStage.finalize()
+				} else {
+					tmp := *rightStage
+					tmp.operator = ensureCollectedArgsStage(rightStage.operator)
+					rightStage = &tmp
+				}
 			}
 		} else {
 			stream.rewind()
@@ -466,12 +496,29 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 					operator: makeLiteralStage([]interface{}{}),
 				}
 				ret.finalize()
-			} else if ret.symbol == LITERAL {
-				// We need to copy this in case we are using the cached value...
+			} else if ret.symbol != SEPARATE {
+				// single value/expression/parameter: wrap as one-element slice
 				tmp := *ret
 				tmp.operator = ensureSliceStage(ret.operator)
 				ret = &tmp
 			}
+		}
+
+		// empty function argument lists become an explicit zero-arg collection
+		// so nil parameter values are not confused with "no arguments".
+		if ret == nil && prev.Kind == FUNCTION {
+			ret = &evaluationStage{
+				symbol:   LITERAL,
+				operator: makeLiteralStage(collectedArgs{}),
+			}
+			ret.finalize()
+		}
+
+		// function calls: normalize arg packing (including a single nil arg)
+		if ret != nil && prev.Kind == FUNCTION {
+			tmp := *ret
+			tmp.operator = ensureCollectedArgsStage(ret.operator)
+			ret = &tmp
 		}
 
 		// advance past the CLAUSE_CLOSE token. We know that it's a CLAUSE_CLOSE, because at parse-time we check for unbalanced parens.
@@ -507,12 +554,23 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 		return getParameterStage(name)
 
 	case NUMERIC:
-		fallthrough
+		num, err := coerceNumericLiteral(token.Value)
+		if err != nil {
+			return nil, err
+		}
+		return getConstantStage(num)
 	case STRING:
 		fallthrough
 	case PATTERN:
 		fallthrough
 	case BOOLEAN:
+		if token.Kind == BOOLEAN {
+			boolVal, ok := token.Value.(bool)
+			if !ok {
+				return nil, fmt.Errorf("unable to plan BOOLEAN token with value type %T", token.Value)
+			}
+			return getConstantStage(boolVal)
+		}
 		return getConstantStage(token.Value)
 	case TIME:
 		tokenTime, ok := token.Value.(time.Time)
@@ -537,6 +595,37 @@ func planValue(stream *tokenStream) (*evaluationStage, error) {
 	}
 	s.finalize()
 	return s, nil
+}
+
+func coerceNumericLiteral(value interface{}) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case uint:
+		return float64(v), nil
+	case uint8:
+		return float64(v), nil
+	case uint16:
+		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
+	default:
+		return 0, fmt.Errorf("unable to plan NUMERIC token with value type %T", value)
+	}
 }
 
 /*

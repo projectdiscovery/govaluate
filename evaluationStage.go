@@ -280,15 +280,20 @@ func makeLiteralStage(literal interface{}) evaluationOperator {
 
 func makeFunctionStage(function ExpressionFunction) evaluationOperator {
 
-	return func(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
+	return func(left interface{}, right interface{}, parameters Parameters) (ret interface{}, err error) {
 
-		if right == nil {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("Function panic: %v", r)
+				ret = nil
+			}
+		}()
+
+		switch r := right.(type) {
+		case collectedArgs:
+			return function([]interface{}(r)...)
+		case nil:
 			return function()
-		}
-
-		switch right.(type) {
-		case []interface{}:
-			return function(right.([]interface{})...)
 		default:
 			return function(right)
 		}
@@ -458,6 +463,15 @@ func makeAccessorStage(pair []string) evaluationOperator {
 			}
 
 			switch r := right.(type) {
+			case collectedArgs:
+				if len(r) <= len(paramsBuf) {
+					params = paramsBuf[:len(r)]
+				} else {
+					params = make([]reflect.Value, len(r))
+				}
+				for idx := range r {
+					params[idx] = reflect.ValueOf(r[idx])
+				}
 			case []interface{}:
 				if len(r) <= len(paramsBuf) {
 					params = paramsBuf[:len(r)]
@@ -523,19 +537,45 @@ func ensureSliceStage(op evaluationOperator) evaluationOperator {
 		if err != nil {
 			return orig, err
 		}
-		return []interface{}{orig}, nil
+		switch orig.(type) {
+		case []interface{}, collectedArgs:
+			return orig, nil
+		default:
+			return []interface{}{orig}, nil
+		}
+	}
+}
+
+// collectedArgs is the planner's representation of function/method argument
+// lists. It lets evaluation distinguish "no args", "one nil arg", and "one
+// slice arg" from a separator-built multi-arg list.
+type collectedArgs []interface{}
+
+func ensureCollectedArgsStage(op evaluationOperator) evaluationOperator {
+	return func(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
+		orig, err := op(left, right, parameters)
+		if err != nil {
+			return orig, err
+		}
+		if args, ok := orig.(collectedArgs); ok {
+			return args, nil
+		}
+		// A parameter that happens to be a []interface{} is still one argument.
+		return collectedArgs{orig}, nil
 	}
 }
 
 func separatorStage(left interface{}, right interface{}, parameters Parameters) (interface{}, error) {
 
-	var ret []interface{}
+	var ret collectedArgs
 
-	switch left.(type) {
+	switch left := left.(type) {
+	case collectedArgs:
+		ret = append(left, right)
 	case []interface{}:
-		ret = append(left.([]interface{}), right)
+		ret = append(collectedArgs(left), right)
 	default:
-		ret = []interface{}{left, right}
+		ret = collectedArgs{left, right}
 	}
 
 	return ret, nil
@@ -547,8 +587,16 @@ func inStage(left interface{}, right interface{}, parameters Parameters) (interf
 		return false, nil
 	}
 
-	// Fast path for the planner's native collection type.
-	if values, ok := right.([]interface{}); ok {
+	switch values := right.(type) {
+	case collectedArgs:
+		for _, value := range values {
+			value = castToFloat64(value)
+			if left == value {
+				return true, nil
+			}
+		}
+		return false, nil
+	case []interface{}:
 		for _, value := range values {
 			value = castToFloat64(value)
 			if left == value {
@@ -646,7 +694,7 @@ func isArray(value interface{}) bool {
 		return false
 	}
 	switch value.(type) {
-	case []interface{}:
+	case []interface{}, collectedArgs:
 		return true
 	}
 	kind := reflect.TypeOf(value).Kind()

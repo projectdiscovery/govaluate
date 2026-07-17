@@ -46,6 +46,10 @@ func (this EvaluableExpression) findNextSQLString(stream *tokenStream, transacti
 	var token ExpressionToken
 	var ret string
 
+	if !stream.hasNext() {
+		return "", errors.New("Unexpected end of SQL token stream")
+	}
+
 	token = stream.next()
 
 	switch token.Kind {
