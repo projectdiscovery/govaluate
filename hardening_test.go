@@ -304,19 +304,6 @@ func TestInOperatorAcceptsTypedSlices(t *testing.T) {
 	}
 }
 
-func TestCacheUnhashableConstant(t *testing.T) {
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("panicked: %v", r)
-		}
-	}()
-	_, err := NewEvaluableExpressionFromTokens([]ExpressionToken{
-		{Kind: STRING, Value: []byte("x")},
-	})
-	// May error during planning/eval depending on build tags; must not panic.
-	_ = err
-}
-
 func TestInSingleParameterClause(t *testing.T) {
 	expr, err := NewEvaluableExpression("1 in (a)")
 	if err != nil {
@@ -465,4 +452,201 @@ func TestNestedTernaryRightAssociative(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInExpressionClause(t *testing.T) {
+	expr, err := NewEvaluableExpression("1 in (1+0)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != true {
+		t.Fatalf("expected true, got %v", result)
+	}
+}
+
+func TestNilRegexpNotMatchOperator(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+
+	var re *regexp.Regexp
+	expr, err := NewEvaluableExpression("a !~ b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = expr.Evaluate(map[string]interface{}{
+		"a": "hello",
+		"b": re,
+	})
+	if err == nil {
+		t.Fatalf("expected error for nil regexp parameter")
+	}
+}
+
+func TestAccessorNilArgNotDropped(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+
+	expr, err := NewEvaluableExpression("foo.FuncArgStr(a)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = expr.Evaluate(map[string]interface{}{
+		"foo": dummyParameterInstance,
+		"a":   nil,
+	})
+	// nil string arg should reach the method (possibly as conversion/call error),
+	// not be treated as a missing argument.
+	if err != nil && strings.Contains(err.Error(), "Too few arguments") {
+		t.Fatalf("nil arg was dropped: %v", err)
+	}
+}
+
+func TestEmptyFunctionCallHasZeroArgs(t *testing.T) {
+	expr, err := NewEvaluableExpressionWithFunctions("f()", map[string]ExpressionFunction{
+		"f": func(args ...interface{}) (interface{}, error) {
+			return len(args), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != 0 {
+		t.Fatalf("expected 0 args, got %v", result)
+	}
+}
+
+func TestEmptyAccessorMethodCallHasZeroArgs(t *testing.T) {
+	expr, err := NewEvaluableExpression("foo.FuncArgStr()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = expr.Evaluate(map[string]interface{}{"foo": dummyParameterInstance})
+	if err == nil {
+		t.Fatalf("expected too-few-arguments error")
+	}
+	if !strings.Contains(err.Error(), "Too few arguments") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSQLTruncatedPrefixAndCoalesce(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+
+	cases := []EvaluableExpression{
+		{
+			QueryDateFormat: isoDateFormat,
+			tokens: []ExpressionToken{
+				{Kind: PREFIX, Value: "-"},
+			},
+		},
+		{
+			QueryDateFormat: isoDateFormat,
+			tokens: []ExpressionToken{
+				{Kind: VARIABLE, Value: "a"},
+				{Kind: TERNARY, Value: "??"},
+			},
+		},
+	}
+	for i, expr := range cases {
+		_, err := expr.ToSQLQuery()
+		if err == nil {
+			t.Fatalf("case %d: expected SQL error", i)
+		}
+	}
+}
+
+func TestFromTokensBadBooleanType(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+
+	_, err := NewEvaluableExpressionFromTokens([]ExpressionToken{
+		{Kind: BOOLEAN, Value: "true"},
+	})
+	if err == nil {
+		t.Fatalf("expected planning error for bad BOOLEAN value")
+	}
+}
+
+func TestVarsSkipsNonStringVariables(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+
+	expr := EvaluableExpression{
+		tokens: []ExpressionToken{
+			{Kind: VARIABLE, Value: 123},
+			{Kind: VARIABLE, Value: "ok"},
+		},
+	}
+	vars := expr.Vars()
+	if len(vars) != 1 || vars[0] != "ok" {
+		t.Fatalf("unexpected vars: %#v", vars)
+	}
+}
+
+func TestInOperatorRejectsNonArrayMessage(t *testing.T) {
+	expr, err := NewEvaluableExpression("1 in foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = expr.Evaluate(map[string]interface{}{"foo": "nope"})
+	if err == nil {
+		t.Fatalf("expected type error")
+	}
+	if !strings.Contains(err.Error(), "not an array") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNullCoalesceTernaryPrecedence(t *testing.T) {
+	expr, err := NewEvaluableExpression("true ?? true ? 100 + 200 : 400")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != 300.0 {
+		t.Fatalf("expected 300, got %v", result)
+	}
+}
+
+func TestCacheUnhashableConstantNoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+
+	expr, err := NewEvaluableExpressionFromTokens([]ExpressionToken{
+		{Kind: STRING, Value: []byte("x")},
+	})
+	if err != nil {
+		return
+	}
+	_, _ = expr.Evaluate(nil)
 }
