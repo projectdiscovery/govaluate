@@ -635,6 +635,28 @@ func TestNullCoalesceTernaryPrecedence(t *testing.T) {
 	}
 }
 
+func TestFunctionArgStringConcat(t *testing.T) {
+	fns := map[string]ExpressionFunction{
+		"base64": func(args ...interface{}) (interface{}, error) {
+			if len(args) != 1 {
+				t.Fatalf("args: %#v", args)
+			}
+			return args[0], nil
+		},
+	}
+	expr, err := NewEvaluableExpressionWithFunctions("base64(username + ':' + password)", fns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := expr.Evaluate(map[string]interface{}{"username": "admin", "password": "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "admin:admin" {
+		t.Fatalf("got %#v", result)
+	}
+}
+
 func TestCacheUnhashableConstantNoPanic(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
